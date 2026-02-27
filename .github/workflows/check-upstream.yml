@@ -1,0 +1,60 @@
+name: Check upstream quickjs-ng
+
+on:
+  schedule:
+    # Check daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get current submodule commit
+        id: current
+        run: |
+          CURRENT_SHA=$(git -C upstream-quickjs rev-parse HEAD)
+          echo "sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
+
+      - name: Get latest upstream tag
+        id: upstream
+        run: |
+          cd upstream-quickjs
+          git fetch --tags origin
+          LATEST_TAG=$(git tag --sort=-v:refname | head -1)
+          LATEST_SHA=$(git rev-parse "$LATEST_TAG")
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "sha=$LATEST_SHA" >> $GITHUB_OUTPUT
+          echo "Latest upstream tag: $LATEST_TAG ($LATEST_SHA)"
+          echo "Current submodule:   ${{ steps.current.outputs.sha }}"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          if [ "${{ steps.current.outputs.sha }}" = "${{ steps.upstream.outputs.sha }}" ]; then
+            echo "needed=false" >> $GITHUB_OUTPUT
+            echo "Already up to date with ${{ steps.upstream.outputs.tag }}"
+          else
+            echo "needed=true" >> $GITHUB_OUTPUT
+            echo "New upstream tag available: ${{ steps.upstream.outputs.tag }}"
+          fi
+
+      - name: Trigger build
+        if: steps.check.outputs.needed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: 'main',
+              inputs: {
+                upstream_tag: '${{ steps.upstream.outputs.tag }}'
+              }
+            });
